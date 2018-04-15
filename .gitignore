@@ -1,0 +1,6 @@
+*.exe
+*.log
+avr/bin
+avr/etc
+avr/mcu_firmware.hex
+tftp/openwrt-ar71xx-generic-arduino-yun-squashfs-sysupgrade.bin
