@@ -12,6 +12,7 @@ import (
 
 // FlashFirmwareAndBootlader flashes the linux image and board bootloader if given cli argument was passed
 func FlashFirmwareAndBootlader(exp expect.Expecter, ctx context, ui *jobsui.UI) (string, error) {
+	ui.SetStatus("")
 	res, err := exp.ExpectBatch([]expect.Batcher{
 		&expect.BSnd{S: "\n"},
 		&expect.BExp{R: "root@"},
@@ -101,7 +102,7 @@ func FlashFirmwareAndBootlader(exp expect.Expecter, ctx context, ui *jobsui.UI) 
 		}
 
 		if err != nil {
-			ui.SetJobFailedText("flashBootloader", err.Error())
+			ui.SetJobStateWithInfo("flashBootloader", jobsui.Error, err.Error())
 			return res[len(res)-1].Output, err
 		}
 
@@ -123,7 +124,7 @@ func FlashFirmwareAndBootlader(exp expect.Expecter, ctx context, ui *jobsui.UI) 
 		}, time.Duration(30)*time.Second)
 
 		if err != nil {
-			ui.SetJobFailedText("flashBootloader", err.Error())
+			ui.SetJobStateWithInfo("flashBootloader", jobsui.Error, err.Error())
 			return res[len(res)-1].Output, err
 		}
 
@@ -145,13 +146,14 @@ func FlashFirmwareAndBootlader(exp expect.Expecter, ctx context, ui *jobsui.UI) 
 		}, time.Duration(10)*time.Second)
 
 		if err != nil {
-			ui.SetJobFailedText("flashBootloader", err.Error())
+			ui.SetJobStateWithInfo("flashBootloader", jobsui.Error, err.Error())
 			return res[len(res)-1].Output, err
 		}
-		ui.SetJobDone("flashBootloader")
+		ui.SetJobState("flashBootloader", jobsui.Done)
+		ui.SetStatus("Bootloader flashing done")
 	} else {
 		log.Info("Bootloader flash skipped")
-		ui.SetJobDisabled("flashBootloader")
+		ui.SetJobState("flashBootloader", jobsui.Skipped)
 	}
 
 	log.Info("Setting up IP addresses")
@@ -178,7 +180,7 @@ func FlashFirmwareAndBootlader(exp expect.Expecter, ctx context, ui *jobsui.UI) 
 	}
 
 	if err != nil {
-		ui.SetJobFailedText("flashImage", err.Error())
+		ui.SetJobStateWithInfo("flashImage", jobsui.Error, err.Error())
 		return res[len(res)-1].Output, err
 	}
 
@@ -218,9 +220,10 @@ func FlashFirmwareAndBootlader(exp expect.Expecter, ctx context, ui *jobsui.UI) 
 	}, time.Duration(90)*time.Second)
 
 	if err != nil {
-		ui.SetJobFailedText("flashImage", err.Error())
+		ui.SetJobStateWithInfo("flashImage", jobsui.Error, err.Error())
 		return res[len(res)-1].Output, err
 	}
-	ui.SetJobDone("flashImage")
+	ui.SetJobState("flashImage", jobsui.Done)
+	ui.SetStatus("Sysupgrade image flashing done")
 	return res[len(res)-1].Output, nil
 }

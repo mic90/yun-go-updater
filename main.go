@@ -37,8 +37,10 @@ func getFileSize(path string) int64 {
 
 // setup logger
 func init() {
+	logFileName := "updater.log"
 	log.SetOutput(os.Stdout)
-	file, err := os.OpenFile("updater.log", os.O_CREATE|os.O_WRONLY, 0666)
+	os.Remove(logFileName)
+	file, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY, 0666)
 	if err == nil {
 		log.SetOutput(file)
 	} else {
@@ -47,10 +49,10 @@ func init() {
 	log.SetLevel(log.DebugLevel)
 }
 
-func waitForKeyAndExit(ui *jobsui.UI) {
-	ui.SetStatus("Press any key to exit")
+func waitForKeyAndExit(ui *jobsui.UI, errorMessage string) {
+	ui.SetStatus(fmt.Sprintf("Press any key to exit, error: %s", errorMessage))
 	fmt.Scanln()
-	os.Exit(0)
+	os.Exit(1)
 }
 
 func main() {
@@ -61,7 +63,7 @@ func main() {
 	serverAddr := ""
 	ipAddr := ""
 
-	flashBootloader := flag.Bool("bl", false, "Flash bootloader too (danger zone)")
+	flashBootloader := flag.Bool("bl", true, "Flash bootloader too (danger zone)")
 	targetBoard := flag.String("board", "Yun", "Update to target board")
 
 	defaultServerAddr := flag.String("serverip", "", "<optional, only use if autodiscovery fails> Specify server IP address (this machine)")
@@ -74,20 +76,20 @@ func main() {
 	ui.AddJob("findBoardAddress", "Find board IP address")
 	ui.AddJob("findOwnAddress", "Find own IP address")
 	ui.AddJob("findSerialPort", "Find serial port for upload")
-	ui.AddJob("uploadTerminalHex", "Upload serial terminal to MCU")
+	ui.AddJob("uploadTerminalHex", "Flash MCU with serial terminal")
 	ui.AddJob("flashBootloader", "Flash MPU bootloader")
 	ui.AddJob("flashImage", "Flash MPU linux image")
 	ui.AddJob("findSerialPortFirmware", "Find serial port for upload")
-	ui.AddJob("uploadFirmware", "Upload final firmware to MCU")
+	ui.AddJob("uploadFirmware", "Flash MCU with final firmware")
 
 	// start tftp server, exit on failure
 	tftpErr := ServeTFTP()
 	if tftpErr != nil {
-		ui.SetJobFailedText("startTftp", tftpErr.Error())
+		ui.SetJobStateWithInfo("startTftp", jobsui.Error, tftpErr.Error())
 		log.Error(tftpErr)
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, "unable to start TFTP server")
 	}
-	ui.SetJobDone("startTftp")
+	ui.SetJobState("startTftp", jobsui.Done)
 
 	serverAddr = *defaultServerAddr
 	ipAddr = *defaultBoardAddr
@@ -95,42 +97,42 @@ func main() {
 	if serverAddr == "" || ipAddr == "" {
 		ipErr := GetServerAndBoardIP(&serverAddr, &ipAddr)
 		if ipErr != nil {
-			ui.SetJobFailedText("findBoardAddress", ipErr.Error())
-			ui.SetJobFailedText("findOwnAddress", ipErr.Error())
+			ui.SetJobStateWithInfo("findBoardAddress", jobsui.Error, ipErr.Error())
+			ui.SetJobStateWithInfo("findOwnAddress", jobsui.Error, ipErr.Error())
 			log.Fatal(ipErr)
-			waitForKeyAndExit(ui)
+			waitForKeyAndExit(ui, "unable to obtain self or board IP")
 		}
 	}
-	ui.SetJobDoneText("findBoardAddress", ipAddr)
-	ui.SetJobDoneText("findOwnAddress", serverAddr)
+	ui.SetJobStateWithInfo("findBoardAddress", jobsui.Done, ipAddr)
+	ui.SetJobStateWithInfo("findOwnAddress", jobsui.Done, serverAddr)
 	log.Infof("Using %s as server address and %s as board address", serverAddr, ipAddr)
 
 	// get serial ports attached
 	ui.SetStatus("Searching for suitable serial port...")
 	serialPortName, err := findSerialPortForFlashing()
 	if err != nil {
-		ui.SetJobFailedText("findSerialPort", err.Error())
+		ui.SetJobStateWithInfo("findSerialPort", jobsui.Error, err.Error())
 		log.Error(err)
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, "unable to find serial port for flashing")
 	}
-	ui.SetJobDoneText("findSerialPort", serialPortName)
+	ui.SetJobStateWithInfo("findSerialPort", jobsui.Done, serialPortName)
 
 	hexName := "mcu_serial_terminal.hex"
 	ui.SetStatus(fmt.Sprintf("Flashing hex file: %s", hexName))
 	port, err := FlashHexFile(serialPortName, hexName)
 	if err != nil {
-		ui.SetJobFailedText("uploadTerminalHex", err.Error())
+		ui.SetJobStateWithInfo("uploadTerminalHex", jobsui.Error, err.Error())
 		log.Error(err)
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, fmt.Sprintf("unable to flash %s", hexName))
 	}
-	ui.SetJobDone("uploadTerminalHex")
+	ui.SetJobState("uploadTerminalHex", jobsui.Done)
 
 	// start the expecter
 	exp, _, err, serport := serialSpawn(port, time.Duration(10)*time.Second, expect.CheckDuration(100*time.Millisecond), expect.Verbose(false), expect.VerboseWriter(os.Stdout))
 	if err != nil {
-		ui.SetJobFailed("flashBootloader")
+		ui.SetJobStateWithInfo("flashBootloader", jobsui.Error, "Unable to spawn serial port")
 		log.Errorf("Unable to spawn serial port: %s", err.Error())
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, "unable to spawn serial port")
 	}
 
 	execDir, _ := os.Executable()
@@ -150,6 +152,7 @@ func main() {
 	retryCount := 0
 	for err != nil && retryCount < 3 /* && strings.Contains(lastline, "Loading: T ")*/ {
 		//retry with different IP addresses
+		ui.SetStatus("Firmware upload failed, retrying")
 		log.Errorf("Firmware uload failed: %s, %s", lastline, err.Error())
 		GetServerAndBoardIP(&serverAddr, &ipAddr)
 		ctx.serverAddr = serverAddr
@@ -162,7 +165,7 @@ func main() {
 		exp.Close()
 		serport.Close()
 		log.Error(err)
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, "unable to flash mpu, all retries failed")
 	}
 	exp.Close()
 	serport.Close()
@@ -171,22 +174,22 @@ func main() {
 	ui.SetStatus("Searching for suitable serial port...")
 	serialPortName, err = findSerialPortForFlashing()
 	if err != nil {
-		ui.SetJobFailedText("findSerialPortFirmware", err.Error())
+		ui.SetJobStateWithInfo("findSerialPortFirmware", jobsui.Error, err.Error())
 		log.Error(err)
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, "unable to find serial port for flashing")
 	}
-	ui.SetJobDoneText("findSerialPortFirmware", serialPortName)
+	ui.SetJobStateWithInfo("findSerialPortFirmware", jobsui.Done, serialPortName)
 
 	// upload the YunSerialTerminal to the board
 	hexName = "mcu_firmware.hex"
 	ui.SetStatus(fmt.Sprintf("Flashing hex file: %s", hexName))
 	port, err = FlashHexFile(serialPortName, hexName)
 	if err != nil {
-		ui.SetJobFailedText("uploadFirmware", err.Error())
+		ui.SetJobStateWithInfo("uploadFirmware", jobsui.Error, err.Error())
 		log.Error(err)
-		waitForKeyAndExit(ui)
+		waitForKeyAndExit(ui, fmt.Sprintf("unable to flash %s", hexName))
 	}
-	ui.SetJobDone("uploadFirmware")
+	ui.SetJobState("uploadFirmware", jobsui.Done)
 
 	ui.SetStatus("All done! You may now close the window, or wait 10s")
 	log.Info("All done! You may now close the window, or wait 10s")
